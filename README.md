@@ -13,7 +13,7 @@ Target EC2  CPUUtilization >= 80% (2 x 5 min)
   -> CloudWatch Alarm
     -> SNS topic (incident-alerts)
       -> HTTPS subscription
-        -> ALB (ACM TLS, n8n.jordandesigns.work)
+        -> ALB (ACM TLS, n8n.jordandesigns.io)
           -> n8n on ECS Fargate
 
 n8n runbook:
@@ -50,7 +50,7 @@ This is the deliberate contrast to the sibling [event-driven-aws-remediation](ht
 
 - Terraform >= 1.6, AWS CLI configured for account `692859913278`
 - The S3 state backend bucket `tf-backend-jord-projs`
-- A public Route 53 hosted zone for `jordandesigns.work`
+- A public Route 53 hosted zone for `jordandesigns.io` (the registrar-delegated zone)
 - An Anthropic API key and a Slack bot token with `chat:write`
 
 ## Deploy

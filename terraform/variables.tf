@@ -19,7 +19,13 @@ variable "vpc_cidr" {
 variable "hosted_zone_name" {
   type        = string
   description = "Public Route 53 hosted zone that the n8n record is created in"
-  default     = "jordandesigns.work"
+  default     = "jordandesigns.io"
+}
+
+variable "hosted_zone_id" {
+  type        = string
+  description = "Zone ID of the public hosted zone. Set explicitly because more than one zone shares the name; this is the one delegated at the registrar."
+  default     = "Z06682271N1J8ZD5DZHU4"
 }
 
 variable "n8n_subdomain" {

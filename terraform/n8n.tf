@@ -9,8 +9,7 @@ locals {
 }
 
 data "aws_route53_zone" "main" {
-  name         = "${var.hosted_zone_name}."
-  private_zone = false
+  zone_id = var.hosted_zone_id
 }
 
 # Publicly trusted TLS so SNS will accept the HTTPS subscription.
