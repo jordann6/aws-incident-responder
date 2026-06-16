@@ -36,11 +36,11 @@ This is the deliberate contrast to the sibling [event-driven-aws-remediation](ht
 
 | Layer | Resource | Role |
 |---|---|---|
-| Detection | **EC2 target** (t3.micro, AL2023) | Demo workload; ships a `stress-ng` unit to drive CPU on demand |
+| Detection | **EC2 target** (t3.micro, AL2023) | Demo workload; ships a self-contained CPU-burn unit and an SSM instance role so it is reachable via Session Manager |
 | Detection | **CloudWatch alarm** | `CPUUtilization >= 80%`, 2 evaluation periods of 5 minutes |
 | Routing | **SNS topic** | Fans the alarm state change out to the n8n HTTPS endpoint |
 | Control plane | **ALB + ACM** | Publicly trusted TLS so SNS accepts the HTTPS subscription |
-| Control plane | **ECS Fargate** | Runs `n8nio/n8n`, the runbook engine, in private-by-SG tasks |
+| Control plane | **ECS Fargate** | Runs `n8nio/n8n`, the runbook engine; tasks accept traffic only from the ALB (SG-restricted) |
 | Runbook | **Claude Haiku** | Generates the incident summary and recommended next step |
 | Runbook | **Slack** | Incident, resolved, and escalation messages to `#incidents` |
 | Remediation | **Scoped IAM user** | `ec2:RebootInstances` on the target only, plus read-only enrichment |
@@ -103,11 +103,11 @@ aws sns list-subscriptions-by-topic --topic-arn "$(terraform output -raw sns_top
 
 ## Validate
 
-Drive CPU on the target so the alarm trips:
+Drive CPU on the target so the alarm trips (the target has an SSM role, so Session Manager works with no inbound access; requires the `session-manager-plugin` locally):
 
 ```bash
 aws ssm start-session --target "$(terraform output -raw target_instance_id)"
-sudo systemctl start incident-stress   # 10 minutes of full CPU load
+sudo systemctl start incident-stress   # burns every vCPU for 10 minutes
 ```
 
 Within two evaluation periods the alarm enters ALARM and the runbook runs end to end. Confirm:

@@ -13,22 +13,58 @@ data "aws_ami" "al2023" {
   }
 }
 
-# A stress helper is preinstalled so the demo can drive CPU on demand:
+# Instance role so the target registers with SSM and can be reached through
+# Session Manager (the SG is egress-only, so this is the only way in).
+resource "aws_iam_role" "target" {
+  name = "${var.project}-target-ssm"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "target_ssm" {
+  role       = aws_iam_role.target.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "target" {
+  name = "${var.project}-target"
+  role = aws_iam_role.target.name
+}
+
+# A self-contained CPU burner is installed so the demo can trip the alarm on
+# demand, with no external package dependency:
 #   sudo systemctl start incident-stress   (then stop it to let the alarm clear)
 resource "aws_instance" "target" {
   ami                    = data.aws_ami.al2023.id
   instance_type          = var.target_instance_type
   subnet_id              = aws_subnet.public[0].id
   vpc_security_group_ids = [aws_security_group.target.id]
+  iam_instance_profile   = aws_iam_instance_profile.target.name
 
   user_data = <<-EOF
     #!/bin/bash
-    dnf install -y stress-ng
+    cat >/usr/local/bin/incident-stress.sh <<'SCRIPT'
+    #!/bin/bash
+    # Burn every vCPU for the given seconds (default 600) to drive CPU to ~100%.
+    DURATION="$${1:-600}"
+    for _ in $(seq 1 "$(nproc)"); do
+      timeout "$DURATION" bash -c 'while :; do :; done' &
+    done
+    wait
+    SCRIPT
+    chmod +x /usr/local/bin/incident-stress.sh
     cat >/etc/systemd/system/incident-stress.service <<'UNIT'
     [Unit]
     Description=Incident demo CPU load
     [Service]
-    ExecStart=/usr/bin/stress-ng --cpu 0 --timeout 600s
+    ExecStart=/usr/local/bin/incident-stress.sh 600
     UNIT
     systemctl daemon-reload
   EOF
