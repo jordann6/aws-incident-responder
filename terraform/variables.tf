@@ -81,3 +81,9 @@ variable "cpu_alarm_threshold" {
   description = "CPUUtilization percentage that trips the incident alarm"
   default     = 80
 }
+
+variable "enable_sns_subscription" {
+  type        = bool
+  description = "Create the SNS->n8n HTTPS subscription. Leave false for the first apply; SNS rejects an unreachable endpoint, so set true only after n8n is running and the workflow is active and able to confirm the subscription."
+  default     = false
+}

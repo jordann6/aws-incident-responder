@@ -105,11 +105,15 @@ resource "aws_cloudwatch_metric_alarm" "cpu" {
   ok_actions    = [aws_sns_topic.incident.arn]
 }
 
-# HTTPS subscription to the n8n webhook. endpoint_auto_confirms is false
-# because n8n confirms programmatically from inside the workflow (it visits
-# the SubscribeURL). Create or recreate this only after the workflow is
-# imported and active, so SNS delivers the confirmation to a live endpoint.
+# HTTPS subscription to the n8n webhook. Gated behind a variable because SNS
+# rejects an unreachable endpoint at subscribe time: on the first apply n8n is
+# not yet serving the webhook, so creating this would fail. Bring up the stack
+# with the default (count 0), import and activate the workflow, then re-apply
+# with enable_sns_subscription=true. endpoint_auto_confirms is false because
+# n8n confirms programmatically from inside the workflow (it visits SubscribeURL).
 resource "aws_sns_topic_subscription" "n8n" {
+  count = var.enable_sns_subscription ? 1 : 0
+
   topic_arn              = aws_sns_topic.incident.arn
   protocol               = "https"
   endpoint               = "https://${local.n8n_fqdn}/webhook/incident"

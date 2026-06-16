@@ -88,10 +88,10 @@ Note the outputs (`n8n_url`, `n8n_webhook_endpoint`, `target_instance_id`, `alar
 
 ### Connect SNS to the live workflow
 
-The SNS subscription must reach an active workflow so n8n can auto-confirm it. After activating, recreate the subscription so SNS redelivers the confirmation:
+The SNS subscription is gated behind `enable_sns_subscription` (default `false`) because SNS rejects an unreachable endpoint at subscribe time, which would fail the first apply before n8n is serving the webhook. Once the workflow is imported and active, enable it so SNS delivers the confirmation to a live endpoint that n8n auto-confirms:
 
 ```bash
-terraform apply -replace=aws_sns_topic_subscription.n8n
+terraform apply -var="enable_sns_subscription=true"
 ```
 
 Confirm it moved out of `PendingConfirmation`:
