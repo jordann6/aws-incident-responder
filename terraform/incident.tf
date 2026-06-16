@@ -3,13 +3,15 @@
 # incident, and the SNS topic that hands it to the n8n runbook over HTTPS.
 # ---------------------------------------------------------------------------
 
+# Standard AL2023 (not "al2023-ami-minimal-*"), which bundles the SSM agent so
+# the instance registers for Session Manager. The minimal AMI omits the agent.
 data "aws_ami" "al2023" {
   most_recent = true
   owners      = ["amazon"]
 
   filter {
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+    values = ["al2023-ami-2023.*-x86_64"]
   }
 }
 
