@@ -1,0 +1,301 @@
+{
+  "name": "AWS Incident Responder",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "incident",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "SNS Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-160, 300],
+      "webhookId": "incident"
+    },
+    {
+      "parameters": {
+        "jsCode": "// SNS posts a JSON envelope as the raw body. Normalise it and, for an\n// alarm Notification, pull the fields the runbook needs.\nconst raw = $input.first().json.body;\nconst sns = typeof raw === 'string' ? JSON.parse(raw) : raw;\n\nconst out = {\n  messageType: sns.Type,\n  subscribeUrl: sns.SubscribeURL || ''\n};\n\nif (sns.Type === 'Notification') {\n  const msg = typeof sns.Message === 'string' ? JSON.parse(sns.Message) : sns.Message;\n  const dims = (msg.Trigger && msg.Trigger.Dimensions) || [];\n  out.alarmName = msg.AlarmName;\n  out.newState = msg.NewStateValue;\n  out.reason = msg.NewStateReason;\n  out.region = msg.Region || 'us-east-1';\n  out.instanceId = (dims.find(d => d.name === 'InstanceId') || {}).value || '';\n}\n\nreturn [{ json: out }];"
+      },
+      "id": "parse-sns",
+      "name": "Parse SNS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [60, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "is-sub",
+              "leftValue": "={{ $json.messageType }}",
+              "rightValue": "SubscriptionConfirmation",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-subscription",
+      "name": "Is Subscription?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [280, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.subscribeUrl }}",
+        "options": {}
+      },
+      "id": "confirm-sub",
+      "name": "Confirm Subscription",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 140]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "is-alarm",
+              "leftValue": "={{ $json.newState }}",
+              "rightValue": "ALARM",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-alarm",
+      "name": "Is ALARM?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [520, 440]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: 'claude-haiku-4-5-20251001',\n  max_tokens: 350,\n  messages: [{\n    role: 'user',\n    content: 'You are an SRE assistant. Write a concise incident summary (3 sentences max) and one recommended next step for an on-call engineer. Alarm: ' + $json.alarmName + '. State reason: ' + $json.reason + '. Instance: ' + $json.instanceId + '. The automated runbook is about to reboot this instance.'\n  }]\n}) }}",
+        "options": {}
+      },
+      "id": "haiku",
+      "name": "Claude Haiku Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 440],
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_ANTHROPIC", "name": "Anthropic API (x-api-key)" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Carry the alarm context forward alongside the model's summary text.\nconst ctx = $('Parse SNS').item.json;\nconst body = $input.first().json;\nconst summary = (body.content && body.content[0] && body.content[0].text) || 'No summary returned.';\nreturn [{ json: { ...ctx, summary } }];"
+      },
+      "id": "format-summary",
+      "name": "Format Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [980, 440]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": { "__rl": true, "value": "#incidents", "mode": "name" },
+        "text": "=:rotating_light: *Incident detected* `{{ $json.alarmName }}`\n*Instance:* {{ $json.instanceId }}\n*State:* {{ $json.newState }}\n\n{{ $json.summary }}\n\n_Runbook is rebooting the instance and will verify recovery._",
+        "otherOptions": {}
+      },
+      "id": "slack-incident",
+      "name": "Slack: Incident Card",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1200, 440],
+      "credentials": {
+        "slackApi": { "id": "REPLACE_SLACK", "name": "Slack account" }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://ec2.{{ $json.region }}.amazonaws.com/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "aws",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "Action", "value": "RebootInstances" },
+            { "name": "InstanceId.1", "value": "={{ $json.instanceId }}" },
+            { "name": "Version", "value": "2016-11-15" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "reboot",
+      "name": "Reboot EC2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1420, 440],
+      "credentials": {
+        "aws": { "id": "REPLACE_AWS", "name": "AWS (incident-responder-n8n)" }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 60,
+        "unit": "seconds"
+      },
+      "id": "wait",
+      "name": "Wait 60s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1640, 440],
+      "webhookId": "incident-wait"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://monitoring.{{ $('Format Summary').item.json.region }}.amazonaws.com/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "aws",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "Action", "value": "DescribeAlarms" },
+            { "name": "AlarmNames.member.1", "value": "={{ $('Format Summary').item.json.alarmName }}" },
+            { "name": "Version", "value": "2010-08-01" }
+          ]
+        },
+        "options": { "response": { "response": { "responseFormat": "text" } } }
+      },
+      "id": "describe-alarms",
+      "name": "Describe Alarms",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1860, 440],
+      "credentials": {
+        "aws": { "id": "REPLACE_AWS", "name": "AWS (incident-responder-n8n)" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// The DescribeAlarms response is XML. If the alarm is no longer in ALARM\n// after the reboot, the incident is resolved; otherwise escalate.\nconst ctx = $('Format Summary').item.json;\nconst xml = String($input.first().json.data || $input.first().json.body || '');\nconst m = xml.match(/<StateValue>([^<]+)<\\/StateValue>/);\nconst state = m ? m[1] : 'UNKNOWN';\nreturn [{ json: { ...ctx, currentState: state, resolved: state !== 'ALARM' } }];"
+      },
+      "id": "check-resolved",
+      "name": "Check Resolved",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2080, 440]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "resolved",
+              "leftValue": "={{ $json.resolved }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-resolved",
+      "name": "Resolved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2300, 440]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": { "__rl": true, "value": "#incidents", "mode": "name" },
+        "text": "=:white_check_mark: *Resolved* `{{ $json.alarmName }}` cleared after automated reboot of {{ $json.instanceId }}. Current state: {{ $json.currentState }}.",
+        "otherOptions": {}
+      },
+      "id": "slack-resolved",
+      "name": "Slack: Resolved",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [2540, 320],
+      "credentials": {
+        "slackApi": { "id": "REPLACE_SLACK", "name": "Slack account" }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": { "__rl": true, "value": "#incidents", "mode": "name" },
+        "text": "=:warning: *Escalation* `{{ $json.alarmName }}` still in {{ $json.currentState }} after automated reboot of {{ $json.instanceId }}. Page the on-call engineer.",
+        "otherOptions": {}
+      },
+      "id": "slack-escalate",
+      "name": "Slack: Escalate",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [2540, 560],
+      "credentials": {
+        "slackApi": { "id": "REPLACE_SLACK", "name": "Slack account" }
+      }
+    }
+  ],
+  "connections": {
+    "SNS Webhook": { "main": [[{ "node": "Parse SNS", "type": "main", "index": 0 }]] },
+    "Parse SNS": { "main": [[{ "node": "Is Subscription?", "type": "main", "index": 0 }]] },
+    "Is Subscription?": {
+      "main": [
+        [{ "node": "Confirm Subscription", "type": "main", "index": 0 }],
+        [{ "node": "Is ALARM?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Is ALARM?": {
+      "main": [
+        [{ "node": "Claude Haiku Summary", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Claude Haiku Summary": { "main": [[{ "node": "Format Summary", "type": "main", "index": 0 }]] },
+    "Format Summary": { "main": [[{ "node": "Slack: Incident Card", "type": "main", "index": 0 }]] },
+    "Slack: Incident Card": { "main": [[{ "node": "Reboot EC2", "type": "main", "index": 0 }]] },
+    "Reboot EC2": { "main": [[{ "node": "Wait 60s", "type": "main", "index": 0 }]] },
+    "Wait 60s": { "main": [[{ "node": "Describe Alarms", "type": "main", "index": 0 }]] },
+    "Describe Alarms": { "main": [[{ "node": "Check Resolved", "type": "main", "index": 0 }]] },
+    "Check Resolved": { "main": [[{ "node": "Resolved?", "type": "main", "index": 0 }]] },
+    "Resolved?": {
+      "main": [
+        [{ "node": "Slack: Resolved", "type": "main", "index": 0 }],
+        [{ "node": "Slack: Escalate", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

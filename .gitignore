@@ -1,0 +1,11 @@
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+*.tfplan
+tf.plan
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.DS_Store
