@@ -1,10 +1,11 @@
 name: Deploy
 
+# Deploys are manually triggered: every job here assumes the OIDC deploy role,
+# so running it on push/PR only produces credential failures on forks and in
+# any clone without AWS_DEPLOY_ROLE_ARN set. Validation on push/PR is handled
+# by security-gate.yml, which needs no cloud credentials.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   id-token: write
