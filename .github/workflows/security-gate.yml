@@ -86,7 +86,7 @@ jobs:
         with:
           soft_fail: true
       - name: Trivy IaC misconfiguration scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: .
@@ -132,7 +132,7 @@ jobs:
           df=$(find . -iname 'Dockerfile' -not -path './.git/*' | head -1)
           docker build -f "$df" -t local-scan-target:${{ github.sha }} "$(dirname "$df")"
       - name: Trivy image scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: local-scan-target:${{ github.sha }}
