@@ -92,9 +92,21 @@ def test_summary_falls_back_when_claude_fails(remediate, monkeypatch):
     def boom(_):
         raise RuntimeError("no model access")
 
+    monkeypatch.setattr(remediate, "CLAUDE_MODEL", "anthropic.claude-opus-5-5")
     monkeypatch.setattr(remediate, "_claude", boom)
     result = remediate.summarize({"AlarmName": "rds-cpu-high", "NewStateValue": "ALARM", "NewStateReason": "forced"})
     assert result["source"] == "template" and "rds-cpu-high is ALARM" in result["summary"]
+    assert "no model access" in result["error"]
+
+
+def test_summary_skips_claude_when_no_model_is_configured(remediate, monkeypatch):
+    def boom(_):
+        raise AssertionError("the model must not be called")
+
+    monkeypatch.setattr(remediate, "CLAUDE_MODEL", "")
+    monkeypatch.setattr(remediate, "_claude", boom)
+    result = remediate.summarize({"AlarmName": "rds-cpu-high", "NewStateValue": "ALARM", "NewStateReason": "forced"})
+    assert result["source"] == "template" and "disabled" in result["error"]
 
 
 def test_relay_reports_only_failed_messages(monkeypatch):

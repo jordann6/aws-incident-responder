@@ -86,9 +86,9 @@ variable "eks_restart_target" {
 }
 
 variable "claude_model" {
-  description = "Claude in Amazon Bedrock model id (in-region us-east-1 endpoint)"
+  description = "Claude in Amazon Bedrock model id (in-region us-east-1 endpoint). Empty skips the call and uses the template note; this account has no Anthropic model access yet (403 for Opus 5.5 and Haiku 4.5, Sonnet 5.5 and Fable 5.1 not found on this endpoint)."
   type        = string
-  default     = "anthropic.claude-opus-5-5"
+  default     = ""
 }
 
 variable "n8n_image" {

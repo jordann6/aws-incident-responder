@@ -96,7 +96,7 @@
         "function": "__REMEDIATE_FUNCTION_ARN__",
         "qualifier": "$LATEST",
         "invocationType": "RequestResponse",
-        "payload": "={{ JSON.stringify({ action: 'notify', subject: '[INCIDENT] ' + $('Parse Alarm').item.json.alarmName, message: $json.result.summary + '\\n\\nSummary source: ' + $json.result.source + '\\nAlarm reason: ' + $('Parse Alarm').item.json.reason + '\\n\\nThe responder is applying the configured remediation and will re-check the alarm.' }) }}"
+        "payload": "={{ JSON.stringify({ action: 'notify', subject: '[INCIDENT] ' + $('Parse Alarm').item.json.alarmName, message: $json.result.summary + '\\n\\nSummary source: ' + $json.result.source + ($json.result.error ? ' (' + $json.result.error + ')' : '') + '\\nAlarm reason: ' + $('Parse Alarm').item.json.reason + '\\n\\nThe responder is applying the configured remediation and will re-check the alarm.' }) }}"
       },
       "id": "notify-incident",
       "name": "Notify Incident",

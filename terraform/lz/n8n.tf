@@ -127,9 +127,11 @@ resource "aws_iam_role_policy" "n8n_invoke" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = "lambda:InvokeFunction"
-      Resource = aws_lambda_function.remediate.arn
+      Effect = "Allow"
+      Action = "lambda:InvokeFunction"
+      # n8n's Lambda node invokes the qualified ARN (...:$LATEST), which an
+      # unqualified resource does not match.
+      Resource = [aws_lambda_function.remediate.arn, "${aws_lambda_function.remediate.arn}:*"]
     }]
   })
 }

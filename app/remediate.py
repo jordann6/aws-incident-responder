@@ -37,7 +37,8 @@ RDS_INSTANCE_ID = os.environ.get("RDS_INSTANCE_ID", "")
 EKS_CLUSTER_NAME = os.environ.get("EKS_CLUSTER_NAME", "")
 EKS_NODEGROUP_NAME = os.environ.get("EKS_NODEGROUP_NAME", "")
 EKS_RESTART_TARGET = os.environ.get("EKS_RESTART_TARGET", "")  # namespace/deployment
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "anthropic.claude-opus-5-5")
+# Empty means the Claude call is skipped and the template note is used.
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "")
 
 ALARM_NAME = re.compile(r"^[A-Za-z0-9._-]{1,255}$")
 
@@ -75,6 +76,9 @@ SYSTEM_PROMPT = (
 
 def summarize(alarm):
     alarm_json = json.dumps(_alarm_fields(alarm), sort_keys=True)
+    if not CLAUDE_MODEL:
+        return {"summary": _template_summary(alarm), "source": "template",
+                "error": "claude disabled: no model configured"}
     try:
         text = _claude(alarm_json)
         return {"summary": text, "source": "claude", "model": CLAUDE_MODEL}
