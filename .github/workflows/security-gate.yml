@@ -101,6 +101,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - name: Unit tests (relay retry semantics, remediation guardrails)
+        run: |
+          pip install --quiet pytest boto3
+          pytest -q tests
       - name: Bandit
         run: |
           pip install --quiet bandit
