@@ -2,6 +2,31 @@
 
 An automated incident response pipeline where the runbook is an n8n workflow, not glue code. A CloudWatch alarm on a target EC2 instance fires into an SNS topic, which delivers over HTTPS to n8n running on ECS Fargate. The workflow confirms its own SNS subscription, asks Claude Haiku for a plain-English incident summary, posts an incident card to Slack, reboots the instance, then waits and re-checks the alarm to decide whether to mark the incident resolved or escalate.
 
+## Landing zone mode
+
+`terraform/lz` runs the responder privately in the prod account of the
+[aws-landing-zone](https://github.com/jordann6/aws-landing-zone) organization: no ALB or
+public endpoint. A forced alarm goes to SQS, a relay Lambda delivers it to n8n on Fargate in
+the private app subnets, and the workflow remediates through role sessions. The central
+alarm re-check assumes a read-only role in the monitoring account. Notices go to the
+ops-alarms email topic, not Slack. n8n is pinned by digest and mirrored into a private ECR
+repository, because Docker Hub is off the hub firewall's allowlist.
+
+Proven live on 2026-10-06: a forced alarm triggered remediation x3 and an RDS Multi-AZ
+failover (started and completed in about 35 seconds), the alarm returned to OK, and the
+DLQ stayed empty. A control run with the alarm forced OK triggered nothing. The live run
+found two defects: the invoke policy allowed the unqualified Lambda ARN while the workflow
+invokes a qualified one (403), and a Lambda in a VPC holds its network interface after
+deletion, so the security group took about 21 minutes to destroy.
+
+The Claude summary is built but **unproven** in this mode: Bedrock returned 403 "not
+available for this account" for two models and 404 for two others, so the proof used
+template summaries. `claude_model` defaults to empty, which skips the call.
+
+Trivy reports two CRITICAL AWS-0104 findings on this root (`0.0.0.0/0` egress on the
+remediation and n8n security groups). A security group cannot name a domain; the prod VPC
+has no internet route, and the hub firewall's default-deny domain allowlist is the control.
+
 ## Architecture
 
 ![Architecture](docs/architecture.png)
