@@ -1,0 +1,372 @@
+{
+  "id": "lzIncidentResp01",
+  "name": "LZ Incident Responder",
+  "active": false,
+  "versionId": "6f1d2c3e-1a2b-4c5d-8e9f-0a1b2c3d4e5f",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "incident",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Alarm Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        300
+      ],
+      "webhookId": "lz-incident"
+    },
+    {
+      "parameters": {
+        "jsCode": "// The relay posts the CloudWatch alarm JSON (raw SNS delivery) as the body.\nconst raw = $input.first().json.body;\nconst alarm = typeof raw === 'string' ? JSON.parse(raw) : raw;\nreturn [{ json: {\n  alarmName: alarm.AlarmName,\n  newState: alarm.NewStateValue,\n  reason: alarm.NewStateReason || '',\n  alarm,\n} }];"
+      },
+      "id": "parse",
+      "name": "Parse Alarm",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-alarm",
+              "leftValue": "={{ $json.newState }}",
+              "rightValue": "ALARM",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-alarm",
+      "name": "Is ALARM?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "assumeRole",
+        "operation": "invoke",
+        "function": "__REMEDIATE_FUNCTION_ARN__",
+        "qualifier": "$LATEST",
+        "invocationType": "RequestResponse",
+        "payload": "={{ JSON.stringify({ action: 'summarize', alarm: $json.alarm }) }}"
+      },
+      "id": "summarize",
+      "name": "Claude Summary",
+      "type": "n8n-nodes-base.awsLambda",
+      "typeVersion": 1,
+      "position": [
+        400,
+        300
+      ],
+      "credentials": {
+        "awsAssumeRole": {
+          "id": "lzAssumeRole0001",
+          "name": "AWS (incident-responder invoke)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "assumeRole",
+        "operation": "invoke",
+        "function": "__REMEDIATE_FUNCTION_ARN__",
+        "qualifier": "$LATEST",
+        "invocationType": "RequestResponse",
+        "payload": "={{ JSON.stringify({ action: 'notify', subject: '[INCIDENT] ' + $('Parse Alarm').item.json.alarmName, message: $json.result.summary + '\\n\\nSummary source: ' + $json.result.source + ($json.result.error ? ' (' + $json.result.error + ')' : '') + '\\nAlarm reason: ' + $('Parse Alarm').item.json.reason + '\\n\\nThe responder is applying the configured remediation and will re-check the alarm.' }) }}"
+      },
+      "id": "notify-incident",
+      "name": "Notify Incident",
+      "type": "n8n-nodes-base.awsLambda",
+      "typeVersion": 1,
+      "position": [
+        600,
+        300
+      ],
+      "credentials": {
+        "awsAssumeRole": {
+          "id": "lzAssumeRole0001",
+          "name": "AWS (incident-responder invoke)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "assumeRole",
+        "operation": "invoke",
+        "function": "__REMEDIATE_FUNCTION_ARN__",
+        "qualifier": "$LATEST",
+        "invocationType": "RequestResponse",
+        "payload": "={{ JSON.stringify({ action: 'remediate', alarm_name: $('Parse Alarm').item.json.alarmName }) }}"
+      },
+      "id": "remediate",
+      "name": "Remediate",
+      "type": "n8n-nodes-base.awsLambda",
+      "typeVersion": 1,
+      "position": [
+        800,
+        300
+      ],
+      "credentials": {
+        "awsAssumeRole": {
+          "id": "lzAssumeRole0001",
+          "name": "AWS (incident-responder invoke)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 120,
+        "unit": "seconds"
+      },
+      "id": "wait",
+      "name": "Wait 120s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1000,
+        300
+      ],
+      "webhookId": "lz-incident-wait"
+    },
+    {
+      "parameters": {
+        "authentication": "assumeRole",
+        "operation": "invoke",
+        "function": "__REMEDIATE_FUNCTION_ARN__",
+        "qualifier": "$LATEST",
+        "invocationType": "RequestResponse",
+        "payload": "={{ JSON.stringify({ action: 'alarm_state', alarm_name: $('Parse Alarm').item.json.alarmName }) }}"
+      },
+      "id": "check",
+      "name": "Check Alarm",
+      "type": "n8n-nodes-base.awsLambda",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        300
+      ],
+      "credentials": {
+        "awsAssumeRole": {
+          "id": "lzAssumeRole0001",
+          "name": "AWS (incident-responder invoke)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-ok",
+              "leftValue": "={{ $json.result.state }}",
+              "rightValue": "OK",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "resolved",
+      "name": "Resolved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "assumeRole",
+        "operation": "invoke",
+        "function": "__REMEDIATE_FUNCTION_ARN__",
+        "qualifier": "$LATEST",
+        "invocationType": "RequestResponse",
+        "payload": "={{ JSON.stringify({ action: 'notify', subject: '[RESOLVED] ' + $('Parse Alarm').item.json.alarmName, message: 'Alarm is back to OK.\\n\\nRemediation: ' + JSON.stringify($('Remediate').item.json.result.results) + '\\nAlarm state: ' + $json.result.reason }) }}"
+      },
+      "id": "notify-resolved",
+      "name": "Notify Resolved",
+      "type": "n8n-nodes-base.awsLambda",
+      "typeVersion": 1,
+      "position": [
+        1600,
+        300
+      ],
+      "credentials": {
+        "awsAssumeRole": {
+          "id": "lzAssumeRole0001",
+          "name": "AWS (incident-responder invoke)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "assumeRole",
+        "operation": "invoke",
+        "function": "__REMEDIATE_FUNCTION_ARN__",
+        "qualifier": "$LATEST",
+        "invocationType": "RequestResponse",
+        "payload": "={{ JSON.stringify({ action: 'notify', subject: '[ESCALATE] ' + $('Parse Alarm').item.json.alarmName, message: 'Alarm is still ' + $json.result.state + ' after remediation. A human needs to look.\\n\\nRemediation: ' + JSON.stringify($('Remediate').item.json.result.results) + '\\nAlarm state: ' + $json.result.reason }) }}"
+      },
+      "id": "notify-escalate",
+      "name": "Notify Escalate",
+      "type": "n8n-nodes-base.awsLambda",
+      "typeVersion": 1,
+      "position": [
+        1600,
+        480
+      ],
+      "credentials": {
+        "awsAssumeRole": {
+          "id": "lzAssumeRole0001",
+          "name": "AWS (incident-responder invoke)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Alarm Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Alarm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Alarm": {
+      "main": [
+        [
+          {
+            "node": "Is ALARM?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is ALARM?": {
+      "main": [
+        [
+          {
+            "node": "Claude Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Claude Summary": {
+      "main": [
+        [
+          {
+            "node": "Notify Incident",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Incident": {
+      "main": [
+        [
+          {
+            "node": "Remediate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remediate": {
+      "main": [
+        [
+          {
+            "node": "Wait 120s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 120s": {
+      "main": [
+        [
+          {
+            "node": "Check Alarm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Alarm": {
+      "main": [
+        [
+          {
+            "node": "Resolved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolved?": {
+      "main": [
+        [
+          {
+            "node": "Notify Resolved",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Escalate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

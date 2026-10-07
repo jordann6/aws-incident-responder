@@ -9,3 +9,14 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 .DS_Store
+
+# local secrets: never commit
+.env
+.env.*
+!.env.example
+
+# Lambda builds, landing zone inputs (account ids, role ARNs), saved plans
+build/
+__pycache__/
+*.tfvars.json
+tfplan
