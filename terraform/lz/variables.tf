@@ -85,10 +85,15 @@ variable "eks_restart_target" {
   default     = ""
 }
 
-variable "claude_model" {
-  description = "Claude in Amazon Bedrock model id (in-region us-east-1 endpoint). Empty skips the call and uses the template note; this account has no Anthropic model access yet (403 for Opus 5.5 and Haiku 4.5, Sonnet 5.5 and Fable 5.1 not found on this endpoint)."
+variable "summary_model" {
+  description = "Amazon Bedrock foundation model id for the incident summary, invoked in-region on bedrock-runtime with the Converse API. Must be a model this account can call on demand in var.region without an inference profile (cross-region profiles are denied by the region-lockdown SCP). Empty skips the call and uses the template note."
   type        = string
-  default     = ""
+  default     = "amazon.nova-lite-v1:0"
+
+  validation {
+    condition     = var.summary_model == "" || (can(regex("^[a-z0-9-]+\\.[A-Za-z0-9.:-]+$", var.summary_model)) && !can(regex("^(us|eu|apac|jp|au|ca|us-gov|global)\\.", var.summary_model)))
+    error_message = "summary_model must be a bare in-region foundation model id (no us. or global. profile prefix), or empty."
+  }
 }
 
 variable "n8n_image" {

@@ -19,9 +19,17 @@ found two defects: the invoke policy allowed the unqualified Lambda ARN while th
 invokes a qualified one (403), and a Lambda in a VPC holds its network interface after
 deletion, so the security group took about 21 minutes to destroy.
 
-The Claude summary is built but **unproven** in this mode: Bedrock returned 403 "not
-available for this account" for two models and 404 for two others, so the proof used
-template summaries. `claude_model` defaults to empty, which skips the call.
+In this mode the incident summary comes from Amazon Nova Lite (`amazon.nova-lite-v1:0`) on
+bedrock-runtime in us-east-1, not Claude. Claude was the first choice and never worked
+in this account: bedrock-mantle returned 403 "not available for this account", and
+Claude on bedrock-runtime needs a cross-region inference profile that the region-lockdown
+SCP denies. Nova Lite runs in-region with no agreement, and IAM allows that one model ARN.
+`summary_model` rejects profile ids; empty skips the call and uses the template note.
+
+Proven live on 2026-10-17: a forced standing uptime alarm (`uptime-monitor-site-down`)
+reached n8n, got a Nova Lite summary (one `Converse` call in CloudTrail, 99 output tokens,
+no errors) and a single notice, and took no action because it has no remediation. The OK
+recovery event triggered nothing. DLQ 0.
 
 Trivy reports two CRITICAL AWS-0104 findings on this root (`0.0.0.0/0` egress on the
 remediation and n8n security groups). A security group cannot name a domain; the prod VPC

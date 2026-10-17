@@ -88,25 +88,61 @@ def test_notify_only_alarm_takes_no_action(remediate):
     assert result["results"] == []
 
 
-def test_summary_falls_back_when_claude_fails(remediate, monkeypatch):
+def test_summary_falls_back_when_the_model_fails(remediate, monkeypatch):
     def boom(_):
         raise RuntimeError("no model access")
 
-    monkeypatch.setattr(remediate, "CLAUDE_MODEL", "anthropic.claude-opus-5-5")
-    monkeypatch.setattr(remediate, "_claude", boom)
+    monkeypatch.setattr(remediate, "SUMMARY_MODEL", "amazon.nova-lite-v1:0")
+    monkeypatch.setattr(remediate, "_model_summary", boom)
     result = remediate.summarize({"AlarmName": "rds-cpu-high", "NewStateValue": "ALARM", "NewStateReason": "forced"})
     assert result["source"] == "template" and "rds-cpu-high is ALARM" in result["summary"]
     assert "no model access" in result["error"]
 
 
-def test_summary_skips_claude_when_no_model_is_configured(remediate, monkeypatch):
+def test_summary_skips_the_model_when_none_is_configured(remediate, monkeypatch):
     def boom(_):
         raise AssertionError("the model must not be called")
 
-    monkeypatch.setattr(remediate, "CLAUDE_MODEL", "")
-    monkeypatch.setattr(remediate, "_claude", boom)
+    monkeypatch.setattr(remediate, "SUMMARY_MODEL", "")
+    monkeypatch.setattr(remediate, "_model_summary", boom)
     result = remediate.summarize({"AlarmName": "rds-cpu-high", "NewStateValue": "ALARM", "NewStateReason": "forced"})
     assert result["source"] == "template" and "disabled" in result["error"]
+
+
+class _Runtime:
+    def __init__(self, response):
+        self.response, self.calls = response, []
+
+    def converse(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+
+def _with_model(monkeypatch, module, response):
+    fake = _Runtime(response)
+    _with_client(monkeypatch, module, fake)
+    monkeypatch.setattr(module, "SUMMARY_MODEL", "amazon.nova-lite-v1:0")
+    return fake
+
+
+def test_summary_uses_the_converse_api_in_region(remediate, monkeypatch):
+    fake = _with_model(monkeypatch, remediate, {
+        "stopReason": "end_turn",
+        "output": {"message": {"content": [{"text": "  The site is down.  "}]}},
+    })
+    result = remediate.summarize({"AlarmName": "uptime-monitor-site-down", "NewStateValue": "ALARM"})
+    assert result == {"summary": "The site is down.", "source": "model", "model": "amazon.nova-lite-v1:0"}
+    call = fake.calls[0]
+    assert call["modelId"] == "amazon.nova-lite-v1:0"
+    assert call["system"][0]["text"] == remediate.SYSTEM_PROMPT
+    assert "uptime-monitor-site-down" in call["messages"][0]["content"][0]["text"]
+
+
+def test_summary_falls_back_when_the_model_filters_the_reply(remediate, monkeypatch):
+    _with_model(monkeypatch, remediate, {"stopReason": "content_filtered",
+                                          "output": {"message": {"content": []}}})
+    result = remediate.summarize({"AlarmName": "rds-cpu-high", "NewStateValue": "ALARM", "NewStateReason": "forced"})
+    assert result["source"] == "template" and "content_filtered" in result["error"]
 
 
 def test_relay_reports_only_failed_messages(monkeypatch):
