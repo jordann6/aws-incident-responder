@@ -5,8 +5,9 @@ AWS, through an assumed role that can invoke nothing else. Every action is on a
 fixed allow list, and every remediation is chosen from configuration by alarm
 name, never from free text in the request:
 
-  summarize    Claude (Amazon Bedrock, in-region) turns the alarm into an
-               on-call note; a plain template stands in if the call fails.
+  summarize    A model on Amazon Bedrock (in-region, Converse API) turns the
+               alarm into an on-call note; a plain template stands in if the
+               call fails or no model is configured.
   notify       Publish a notice to the central ops topic (its email
                subscribers get it next to the raw alarm).
   remediate    Run the configured actions for the alarm: rds_failover,
@@ -26,6 +27,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 import boto3
+from botocore.config import Config
 from botocore.signers import RequestSigner
 
 REGION = os.environ.get("AWS_REGION", "us-east-1")
@@ -37,8 +39,9 @@ RDS_INSTANCE_ID = os.environ.get("RDS_INSTANCE_ID", "")
 EKS_CLUSTER_NAME = os.environ.get("EKS_CLUSTER_NAME", "")
 EKS_NODEGROUP_NAME = os.environ.get("EKS_NODEGROUP_NAME", "")
 EKS_RESTART_TARGET = os.environ.get("EKS_RESTART_TARGET", "")  # namespace/deployment
-# Empty means the Claude call is skipped and the template note is used.
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "")
+# Bedrock foundation model id, invoked in-region. Empty means the call is skipped
+# and the template note is used.
+SUMMARY_MODEL = os.environ.get("SUMMARY_MODEL", "")
 
 ALARM_NAME = re.compile(r"^[A-Za-z0-9._-]{1,255}$")
 
@@ -76,12 +79,12 @@ SYSTEM_PROMPT = (
 
 def summarize(alarm):
     alarm_json = json.dumps(_alarm_fields(alarm), sort_keys=True)
-    if not CLAUDE_MODEL:
+    if not SUMMARY_MODEL:
         return {"summary": _template_summary(alarm), "source": "template",
-                "error": "claude disabled: no model configured"}
+                "error": "model summary disabled: no model configured"}
     try:
-        text = _claude(alarm_json)
-        return {"summary": text, "source": "claude", "model": CLAUDE_MODEL}
+        text = _model_summary(alarm_json)
+        return {"summary": text, "source": "model", "model": SUMMARY_MODEL}
     except Exception as exc:  # noqa: BLE001 - the runbook must not stall on the summary
         return {
             "summary": _template_summary(alarm),
@@ -96,23 +99,25 @@ def _alarm_fields(alarm):
     return {k: alarm.get(k) for k in keys if k in alarm}
 
 
-def _claude(alarm_json):
-    # Imported here so the remediation paths do not depend on the SDK loading.
-    from anthropic import AnthropicBedrockMantle
-
-    client = AnthropicBedrockMantle(aws_region=REGION, max_retries=1, timeout=45.0)
-    message = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=2000,
-        system=SYSTEM_PROMPT,
-        output_config={"effort": "low"},
-        messages=[{"role": "user", "content": alarm_json}],
+def _model_summary(alarm_json):
+    # The standard bedrock-runtime endpoint in this region. The model is an
+    # in-region foundation model, so no cross-region inference profile is used
+    # and the region-lockdown SCP is never in play.
+    client = boto3.client("bedrock-runtime", region_name=REGION,
+                          config=Config(read_timeout=45, retries={"max_attempts": 2}))
+    response = client.converse(
+        modelId=SUMMARY_MODEL,
+        system=[{"text": SYSTEM_PROMPT}],
+        messages=[{"role": "user", "content": [{"text": alarm_json}]}],
+        inferenceConfig={"maxTokens": 512, "temperature": 0.2},
     )
-    if message.stop_reason == "refusal":
-        raise RuntimeError("model declined the request")
-    text = "".join(block.text for block in message.content if block.type == "text").strip()
+    stop = response.get("stopReason")
+    if stop in ("content_filtered", "guardrail_intervened"):
+        raise RuntimeError(f"model declined the request (stopReason {stop})")
+    blocks = response.get("output", {}).get("message", {}).get("content", [])
+    text = "".join(block.get("text", "") for block in blocks).strip()
     if not text:
-        raise RuntimeError(f"no text in response (stop_reason {message.stop_reason})")
+        raise RuntimeError(f"no text in response (stopReason {stop})")
     return text
 
 

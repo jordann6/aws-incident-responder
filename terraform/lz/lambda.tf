@@ -106,12 +106,16 @@ resource "aws_iam_role_policy_attachment" "remediate_vpc" {
 }
 
 data "aws_iam_policy_document" "remediate" {
-  statement {
-    sid = "ClaudeInBedrockInRegion"
-    # Claude in Amazon Bedrock (Messages API on bedrock-mantle) authorizes
-    # inference against the account's projects; region and account are pinned.
-    actions   = ["bedrock-mantle:CreateInference"]
-    resources = ["arn:aws:bedrock-mantle:${var.region}:${local.account_id}:project/*"]
+  # The summary model, invoked in-region on bedrock-runtime (Converse authorizes
+  # as InvokeModel). One foundation model in one region; no inference profile,
+  # so the region-lockdown SCP never applies. Omitted when no model is set.
+  dynamic "statement" {
+    for_each = var.summary_model == "" ? [] : [var.summary_model]
+    content {
+      sid       = "SummaryModelInRegion"
+      actions   = ["bedrock:InvokeModel"]
+      resources = ["arn:aws:bedrock:${var.region}::foundation-model/${statement.value}"]
+    }
   }
 
   statement {
@@ -157,8 +161,8 @@ resource "aws_iam_role_policy" "remediate" {
   policy = data.aws_iam_policy_document.remediate.json
 }
 
-# Built by scripts/build-lambdas.sh: the handler plus anthropic[bedrock] for
-# Python 3.12 on x86_64. Run it before planning.
+# Built by scripts/build-lambdas.sh: the handler, plus any pinned dependencies
+# for Python 3.12 on x86_64 (boto3 comes from the runtime). Run it before planning.
 data "archive_file" "remediate" {
   type        = "zip"
   source_dir  = "${path.module}/../../build/remediate"
@@ -172,7 +176,7 @@ resource "aws_lambda_function" "remediate" {
   #checkov:skip=CKV_AWS_50:One call per runbook step; X-Ray adds little.
   #checkov:skip=CKV_AWS_115:Reserved concurrency fails in accounts at the 10-execution default; n8n calls it serially.
   function_name    = "${var.name}-remediate"
-  description      = "Allow-listed remediation, Claude summaries and notices for the incident runbook"
+  description      = "Allow-listed remediation, model summaries and notices for the incident runbook"
   role             = aws_iam_role.remediate.arn
   runtime          = "python3.12"
   architectures    = ["x86_64"]
@@ -197,7 +201,7 @@ resource "aws_lambda_function" "remediate" {
       EKS_CLUSTER_NAME      = var.eks_cluster_name
       EKS_NODEGROUP_NAME    = var.eks_node_group_name
       EKS_RESTART_TARGET    = var.eks_restart_target
-      CLAUDE_MODEL          = var.claude_model
+      SUMMARY_MODEL         = var.summary_model
     }
   }
 }
