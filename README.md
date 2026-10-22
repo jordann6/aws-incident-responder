@@ -2,7 +2,36 @@
 
 An automated incident response pipeline where the runbook is an n8n workflow, not glue code. A CloudWatch alarm on a target EC2 instance fires into an SNS topic, which delivers over HTTPS to n8n running on ECS Fargate. The workflow confirms its own SNS subscription, asks Claude Haiku for a plain-English incident summary, posts an incident card to Slack, reboots the instance, then waits and re-checks the alarm to decide whether to mark the incident resolved or escalate.
 
+## Architecture
+
+![Standalone architecture](docs/architecture.png)
+
+The standalone deploy. An alarm on the target fans out through SNS to n8n behind
+an ALB with a public TLS certificate, because SNS only delivers HTTPS to a trusted
+endpoint. n8n summarizes the alarm, posts to Slack, reboots the instance, waits,
+and reads the alarm again before it calls the incident resolved. The landing
+zone version, with no public endpoint, is [below](#landing-zone-mode).
+
+## The problem
+
+An alarm at 3 a.m. depends on a person waking up, finding the runbook and
+following it the same way every time. Automating that with a Lambda works, but
+the runbook then lives inside code that only its author reads. This project
+keeps the runbook as a visual workflow anyone on call can inspect, and makes
+it check its own work before it closes an incident.
+
+## Why n8n instead of Lambda
+
+This is the deliberate contrast to the sibling [event-driven-aws-remediation](https://github.com/jordann6/event-driven-aws-remediation) project, which uses a Python Lambda as the glue between alarm and action. Here the same incident class is handled by a visual, auditable runbook running as a real service on AWS. The runbook is version controlled as JSON, the remediation steps are inspectable without reading code, and adding a step (enrichment, an approval gate, a second remediation) is a node rather than a redeploy. Claude Haiku adds a human-readable summary so the Slack card reads like an on-call note rather than a raw alarm payload.
+
 ## Landing zone mode
+
+![Landing zone mode](docs/architecture-lz.png)
+
+The alarm arrives from the shared-services ops topic through SQS, so a slow or
+restarting n8n never loses an event; anything that fails lands in the DLQ. n8n has
+no public endpoint. The remediate Lambda does the work through role sessions, and the
+alarm re-check reads through a read-only role in shared-services.
 
 `terraform/lz` runs the responder privately in the prod account of the
 [aws-landing-zone](https://github.com/jordann6/aws-landing-zone) organization: no ALB or
@@ -14,17 +43,11 @@ repository, because Docker Hub is off the hub firewall's allowlist.
 
 Proven live on 2026-10-06: a forced alarm triggered remediation x3 and an RDS Multi-AZ
 failover (started and completed in about 35 seconds), the alarm returned to OK, and the
-DLQ stayed empty. A control run with the alarm forced OK triggered nothing. The live run
-found two defects: the invoke policy allowed the unqualified Lambda ARN while the workflow
-invokes a qualified one (403), and a Lambda in a VPC holds its network interface after
-deletion, so the security group took about 21 minutes to destroy.
+DLQ stayed empty. A control run with the alarm forced OK triggered nothing.
 
 In this mode the incident summary comes from Amazon Nova Lite (`amazon.nova-lite-v1:0`) on
-bedrock-runtime in us-east-1, not Claude. Claude was the first choice and never worked
-in this account: bedrock-mantle returned 403 "not available for this account", and
-Claude on bedrock-runtime needs a cross-region inference profile that the region-lockdown
-SCP denies. Nova Lite runs in-region with no agreement, and IAM allows that one model ARN.
-`summary_model` rejects profile ids; empty skips the call and uses the template note.
+bedrock-runtime in us-east-1, and IAM allows that one model ARN. `summary_model` rejects
+profile ids; empty skips the call and uses the template note.
 
 Proven live on 2026-10-17: a forced standing uptime alarm (`uptime-monitor-site-down`)
 reached n8n, got a Nova Lite summary (one `Converse` call in CloudTrail, 99 output tokens,
@@ -35,9 +58,28 @@ Trivy reports two CRITICAL AWS-0104 findings on this root (`0.0.0.0/0` egress on
 remediation and n8n security groups). A security group cannot name a domain; the prod VPC
 has no internet route, and the hub firewall's default-deny domain allowlist is the control.
 
-## Architecture
+## What broke along the way
 
-![Architecture](docs/architecture.png)
+1. **SNS refused to subscribe before n8n existed.** SNS validates an HTTPS
+   endpoint at subscribe time, so creating the subscription on the first apply
+   failed. It now sits behind `enable_sns_subscription`, off until the workflow
+   is imported and serving.
+2. **The demo instance could never be reached.** It had no instance profile and
+   an egress-only security group, so `aws ssm start-session` had nothing to
+   connect to, and `stress-ng` is not in the AL2023 default repos. Fixed with an
+   SSM role and a self-contained CPU burner.
+3. **An AMI wildcard picked the wrong image.** `al2023-ami-*-x86_64` could
+   resolve to the minimal AMI, which ships without the SSM agent. The filter now
+   pins the standard image.
+4. **A qualified ARN broke the invoke permission.** n8n's Lambda node calls the
+   qualified function ARN, and the policy allowed only the unqualified one, so
+   the first landing zone run got a 403. The policy now allows both.
+5. **A VPC Lambda held its security group for 21 minutes.** Lambda keeps its
+   network interface after the function is deleted, so teardown waited on it.
+6. **Claude never worked in the landing zone account.** bedrock-mantle returned
+   403 "not available for this account", and Claude on bedrock-runtime needs a
+   cross-region inference profile that the region-lockdown SCP denies. The
+   summary moved to Amazon Nova Lite, which runs in-region.
 
 ## How it works
 
@@ -60,10 +102,6 @@ n8n runbook:
   -> resolved  -> Slack resolved
      not yet   -> Slack escalate
 ```
-
-## Why n8n instead of Lambda
-
-This is the deliberate contrast to the sibling [event-driven-aws-remediation](https://github.com/jordann6/event-driven-aws-remediation) project, which uses a Python Lambda as the glue between alarm and action. Here the same incident class is handled by a visual, auditable runbook running as a real service on AWS. The runbook is version controlled as JSON, the remediation steps are inspectable without reading code, and adding a step (enrichment, an approval gate, a second remediation) is a node rather than a redeploy. Claude Haiku adds a human-readable summary so the Slack card reads like an on-call note rather than a raw alarm payload.
 
 ## Components
 
